@@ -2,6 +2,7 @@
 #It's mainly about overcoming RKN's whitelists with the help of publicly available VLESS VPN configs from www.github.com/igareck.
 #I'll mainly try to focus on Termux compatability with the script since whitelists mainly affect me when I'm outside and Termux is my go-to option.
 
+pkg install wget -y
 pkg install nmap -y
 pkg install cronie -y
 mkdir $HOME/VLESS
@@ -10,14 +11,38 @@ cd $HOME/VLESS
 cat << 'EOF' > vless_checker.sh
 #!/bin/bash
 
+WORKDIR="$HOME/VLESS"
+URL="https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt"
+FILE="$WORKDIR/unchecked_vless.txt"
+OUTFILE="$WORKDIR/working_vless.txt"
+
 cd "$HOME/VLESS" || exit 1
 
-if ! wget -q -O unchecked_vless.txt https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt; then 
-    echo "Failed to download the configs file."
-    exit 1
+download_file() {
+    echo "Downloading config list..."
+    if ! wget -q -O "$FILE" "$URL"; then
+        echo "Failed to download the configs file."
+        exit 1
+    fi
+    echo "Download complete."
+}
+
+if [[ ! -f "$FILE" ]]; then
+    echo "Config file not found. First run → downloading."
+    download_file
+else
+    # Ask only if running in terminal (not cron)
+    if [ -t 0 ]; then
+        read -p "Download a fresh config list? (y/n): " choice
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            download_file
+        else
+            echo "Using existing config list."
+        fi
+    fi
 fi
 
-> working_vless.txt
+> "$OUTFILE"
 echo "$(date +'%Y-%m-%d %T')" >> working_vless.txt
 
 while read -r link; do
@@ -34,17 +59,18 @@ while read -r link; do
 
     echo -n "Checking $ip:$port... "
 
-    if timeout 1 bash -c "</dev/tcp/$ip/$port" 2>/dev/null; then
+    if timeout 2 bash -c "</dev/tcp/$ip/$port" 2>/dev/null; then
         echo "$link" >> working_vless.txt
         echo "✅ WORKING"
     else
         echo "❌ FAILED"
     fi
-done < unchecked_vless.txt
+done < "$FILE"
 
-echo "Done! Working links saved to working_vless.txt"
+echo "Done! Working links saved to "$OUTFILE""
 EOF
 
 chmod +x vless_checker.sh
 ./vless_checker.sh
-(crontab -l 2>/dev/null; echo "26 3-17 * * 1-5 /bin/bash $HOME/VLESS/vless_checker.sh") | crontab -
+(crontab -l 2>/dev/null; echo "25 3-17 * * 1-5 /bin/bash $HOME/VLESS/vless_checker.sh >> $HOME/VLESS/cron.log 2>&1") | crontab -
+crond
