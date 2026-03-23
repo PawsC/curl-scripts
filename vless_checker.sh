@@ -1,29 +1,43 @@
-#This is my first somewhat decently sized project.
-#It's mainly about overcoming RKN's whitelists with the help of publicly available VLESS VPN configs from www.github.com/igareck.
-#I'll mainly try to focus on Termux compatability with the script since whitelists mainly affect me when I'm outside and Termux is my go-to option.
-
 #!/bin/bash
+
 WORKDIR="$HOME/VLESS"
-URL="https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt"
+URLS="https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt;https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
 FILE="$WORKDIR/unchecked_vless.txt"
 OUTFILE="$WORKDIR/working_vless.txt"
 
 cd "$HOME/VLESS" || exit 1
 
 download_file() {
-    echo "Downloading config list..."
-    if ! wget -q -O "$FILE" "$URL"; then
-        echo "Failed to download the configs file."
+    echo "Downloading config lists..."
+
+    > "$FILE"
+
+    IFS=';' read -ra SOURCES <<< "$URLS"
+
+    for url in "${SOURCES[@]}"; do
+        echo "Fetching: $url"
+
+        if ! wget -q -O - "$url" >> "$FILE"; then
+            echo "⚠️ Failed to download: $url"
+        fi
+    done
+    
+    # Deduplicate
+    sort -u "$FILE" -o "$FILE"
+
+    if [[ ! -s "$FILE" ]]; then
+        echo "❌ ERROR: No valid data downloaded."
         exit 1
     fi
-    echo "Download complete."
+
+    echo "Download complete. Combined sources saved to $FILE"
 }
 
+# First run / update logic
 if [[ ! -f "$FILE" ]]; then
     echo "Config file not found. First run → downloading."
     download_file
 else
-    # Ask only if running in terminal (not cron)
     if [ -t 0 ]; then
         read -p "Download a fresh config list? (y/n): " choice
         if [[ "$choice" =~ ^[Yy]$ ]]; then
@@ -34,10 +48,28 @@ else
     fi
 fi
 
-> "$OUTFILE"
-echo "$(date +'%Y-%m-%d %T')" >> working_vless.txt
+# Thread input (only if interactive)
+THREADS=1
+if [ -t 0 ]; then
+    while true; do
+        read -p "How many threads: " THREADS
+        if [[ "$THREADS" =~ ^[0-9]+$ ]] && (( THREADS > 0 )); then
+            break
+        else
+            echo "Please enter a valid positive integer."
+        fi
+    done
+fi
 
-while read -r link; do
+# Keep only valid lines (ip:port present after @)
+grep -E '@[^ ]+:[0-9]+' "$FILE" > "$FILE.cleaned"
+mv "$FILE.cleaned" "$FILE"
+
+> "$OUTFILE"
+echo "$(date +'%Y-%m-%d %T')" >> "$OUTFILE"
+
+check_one() {
+    link="$1"
 
     address_port=$(echo "$link" | grep -oP '(?<=@)[^/?#]+')
 
@@ -45,18 +77,38 @@ while read -r link; do
     port="${address_port#*:}"
 
     if [[ -z "$ip" || -z "$port" ]]; then
-        echo "⚠️ Skipping invalid format: ${link:0:30}..."
-        continue
+        echo "⚠️ Skipping invalid format"
+        return
     fi
-
-    echo -n "Checking $ip:$port... "
 
     if timeout 2 bash -c "</dev/tcp/$ip/$port" 2>/dev/null; then
-        echo "$link" >> working_vless.txt
-        echo "✅ WORKING"
+        echo "$link" >> "$OUTFILE"
+        status="✅"
     else
-        echo "❌ FAILED"
+        status="❌"
     fi
-done < "$FILE"
 
-echo "Done! Working links saved to "$OUTFILE""
+    echo "$status $ip:$port"
+}
+
+export -f check_one
+export OUTFILE
+
+# Parallel execution
+TOTAL=$(wc -l < "$FILE")
+
+nl -ba "$FILE" | while read -r num link; do
+    (
+        result=$(check_one "$link")
+        printf "[%d/%d] %s\n" "$num" "$TOTAL" "$result"
+    ) &
+    
+    # limit parallel jobs
+    while (( $(jobs -r | wc -l) >= THREADS )); do
+        sleep 0.1
+    done
+done
+
+wait
+
+echo "Done! Working links saved to $OUTFILE"
