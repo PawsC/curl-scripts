@@ -2,15 +2,7 @@
 #It's mainly about overcoming RKN's whitelists with the help of publicly available VLESS VPN configs from www.github.com/igareck.
 #I'll mainly try to focus on Termux compatability with the script since whitelists mainly affect me when I'm outside and Termux is my go-to option.
 
-pkg install wget -y
-pkg install nmap -y
-pkg install cronie -y
-mkdir $HOME/VLESS
-cd $HOME/VLESS
-
-cat << 'EOF' > vless_checker.sh
 #!/bin/bash
-
 WORKDIR="$HOME/VLESS"
 URL="https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt"
 FILE="$WORKDIR/unchecked_vless.txt"
@@ -68,9 +60,3 @@ while read -r link; do
 done < "$FILE"
 
 echo "Done! Working links saved to "$OUTFILE""
-EOF
-
-chmod +x vless_checker.sh
-./vless_checker.sh
-(crontab -l 2>/dev/null; echo "25 3-17 * * 1-5 /bin/bash $HOME/VLESS/vless_checker.sh >> $HOME/VLESS/cron.log 2>&1") | crontab -
-crond
